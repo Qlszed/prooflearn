@@ -1,0 +1,2 @@
+import VerifyClient from "@/components/VerifyClient";
+export default function VerifyPage() { return <main className="shell inner-page"><header className="topbar"><a className="brand" href="/">ProofLearn<span>.</span></a><span className="step">02 / 03</span></header><div className="verify-layout"><VerifyClient /><aside className="margin-note verify-note"><span className="note-number">02</span><div className="note-rule" /><p>Test the<br />understanding.</p><small>One answer at<br />a time.</small></aside></div></main>; }
