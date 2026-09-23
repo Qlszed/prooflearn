@@ -1,6 +1,6 @@
 # ProofLearn
 
-ProofLearn turns a student submission into a short, adaptive academic defence.
+ProofLearn turns a student submission into a short, adaptive text-based academic defence.
 
 **We don't detect AI. We verify learning.**
 
@@ -19,7 +19,9 @@ The product checks whether a student can explain the ideas behind a written answ
 - Four focused screens: landing, setup, verification, and report
 - Structured concept extraction before the interview begins
 - Adaptive questions based on the complete question and answer history
-- Concept scores, strengths, weaknesses, misconceptions, and a recommended next step
+- Concept scores based on a transparent four-level rubric
+- Evidence quotes, explanations, misconception status, and a recommended next step
+- Session recovery after a page refresh
 - Warm editorial interface designed for desktop and mobile
 - Next.js API routes that run alongside the frontend
 
