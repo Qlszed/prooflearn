@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { t, useLanguage, type Language } from "@/lib/i18n";
 
 type Evaluation = {
   target_concept: string;
@@ -19,6 +20,7 @@ type Evaluation = {
 type HistoryItem = { question: string; answer: string; evaluation?: Evaluation };
 type Session = {
   subject: string;
+  language?: Language;
   assignment: string;
   submission: string;
   conceptMap: unknown;
@@ -34,6 +36,7 @@ const storageKey = "prooflearn";
 
 export default function VerifyClient() {
   const router = useRouter();
+  const language = useLanguage();
   const [data, setData] = useState<Session | null>(null);
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
@@ -82,6 +85,7 @@ export default function VerifyClient() {
           history: data.history,
           latestAnswer: answer,
           currentQuestion,
+          language,
         }),
       });
       const evaluation = await response.json() as Evaluation & { error?: string };
@@ -95,6 +99,7 @@ export default function VerifyClient() {
         evaluations,
         questionNumber: data.questionNumber + 1,
         currentQuestion: evaluation.next_question,
+        language,
         draftAnswer: "",
       };
 
@@ -102,7 +107,7 @@ export default function VerifyClient() {
         const reportResponse = await fetch("/api/report", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conceptMap: next.conceptMap, history, evaluations }),
+          body: JSON.stringify({ language, conceptMap: next.conceptMap, history, evaluations }),
         });
         const report = await reportResponse.json() as { error?: string };
         if (!reportResponse.ok) throw new Error(report.error || "Unable to create report");
@@ -121,21 +126,21 @@ export default function VerifyClient() {
     }
   }
 
-  if (!ready || !data) return <div className="loading-block">Restoring your verification…</div>;
+  if (!ready || !data) return <div className="loading-block">{t(language, "restoring")}</div>;
 
   return <div className="verify-wrap">
     <div className="verify-meta">
-      <p className="eyebrow">Short text defence / {data.subject}</p>
-      <span>Question {data.questionNumber} of ~4</span>
+      <p className="eyebrow">{t(language, "shortDefence")} / {data.subject}</p>
+      <span>{t(language, "question")} {data.questionNumber} {t(language, "questionOf")}</span>
     </div>
     <div className="progress"><div style={{ width: `${Math.min(data.questionNumber / 4 * 100, 100)}%` }} /></div>
     <section className="question-area">
-      <p className="question-label">Your question</p>
+      <p className="question-label">{t(language, "yourQuestion")}</p>
       <h1>{data.currentQuestion || data.firstQuestion}</h1>
       <form onSubmit={submit}>
-        <label>Your answer<textarea autoFocus required value={answer} onChange={event => { const value = event.target.value; setAnswer(value); if (data) sessionStorage.setItem(storageKey, JSON.stringify({ ...data, draftAnswer: value })); }} placeholder="Explain it in your own words…" rows={7} /></label>
+        <label>{t(language, "yourAnswer")}<textarea autoFocus required value={answer} onChange={event => { const value = event.target.value; setAnswer(value); if (data) sessionStorage.setItem(storageKey, JSON.stringify({ ...data, draftAnswer: value })); }} placeholder={t(language, "answerPlaceholder")} rows={7} /></label>
         {error && <p className="error">{error}</p>}
-        <button className="button primary" disabled={loading}>{loading ? <><span className="dot" /> Evaluating answer…</> : <>Submit answer <span>→</span></>}</button>
+        <button className="button primary" disabled={loading}>{loading ? <><span className="dot" /> {t(language, "evaluating")}</> : <>{t(language, "submitAnswer")} <span>→</span></>}</button>
       </form>
     </section>
   </div>;
