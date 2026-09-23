@@ -105,7 +105,17 @@ function displayConceptName(name: string) {
   return name.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
 }
 
-export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Evaluation[] = [], report: Report): Report {
+function isNoIssue(value: string) {
+  return ["none", "no issue", "no issue detected", "нет", "нет.", "жоқ", "жоқ.", "none detected"].includes(value.toLowerCase().trim());
+}
+
+function fallbackNextStep(language: string) {
+  if (language === "ru") return "Попросите ученика применить эту идею к новому примеру.";
+  if (language === "kk") return "Оқушыдан осы түсінікті жаңа мысалға қолдануды сұраңыз.";
+  return "Ask the student to apply this idea to a new example.";
+}
+
+export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Evaluation[] = [], report: Report, language = "en"): Report {
   const sourceConceptsRaw = Array.isArray(conceptMap?.concepts) ? conceptMap.concepts : [];
   const sourceConcepts = Array.from(new Map(sourceConceptsRaw.map((concept) => [concept.name.toLowerCase().trim(), concept])).values());
   const validEvaluations = evaluations.filter((evaluation) => evaluation && (evaluation.target_concept || Object.keys(evaluation.mastery_updates || {}).length));
@@ -124,7 +134,7 @@ export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Ev
     if (!latest) return { name: displayConceptName(concept.name), score: null, level: "Insufficient data", tested: false, evidence_quote: "", explanation: "This concept was not directly checked during the defence.", next_step: "Ask one focused question about this concept.", misconception_status: "none" };
     const score = scoreFor(latest);
     const level = score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak";
-    const nextStep = latest.detected_issue && !["none", "no issue", "no issue detected"].includes(latest.detected_issue.toLowerCase().trim()) ? latest.detected_issue : "Try one application question in a new context.";
+    const nextStep = latest.detected_issue && !isNoIssue(latest.detected_issue) ? latest.detected_issue : fallbackNextStep(language);
     return { name: displayConceptName(concept.name), score, level, tested: true, evidence_quote: latest.evidence_quote, explanation: latest.explanation, next_step: nextStep, misconception_status: latest.misconception_status };
   });
   if (!concepts.some((concept) => concept.score !== null) && validEvaluations.length) {
@@ -135,7 +145,7 @@ export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Ev
     });
     concepts = Array.from(latestByConcept.values()).map((evaluation, index) => {
       const score = scoreFor(evaluation);
-      const nextStep = evaluation.detected_issue && !["none", "no issue", "no issue detected"].includes(evaluation.detected_issue.toLowerCase().trim()) ? evaluation.detected_issue : "Try one application question in a new context.";
+      const nextStep = evaluation.detected_issue && !isNoIssue(evaluation.detected_issue) ? evaluation.detected_issue : fallbackNextStep(language);
       return { name: displayConceptName(evaluation.target_concept || Object.keys(evaluation.mastery_updates || {})[0] || `Checked concept ${index + 1}`), score, level: score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak", tested: true, evidence_quote: evaluation.evidence_quote || "", explanation: evaluation.explanation || "This concept was checked during the defence.", next_step: nextStep, misconception_status: evaluation.misconception_status || "none" };
     });
   }
