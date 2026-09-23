@@ -91,22 +91,53 @@ export async function makeReport(input: { language?: string; conceptMap: Concept
 const levelScores = { not_demonstrated: 25, partial: 50, independent: 75, applied: 100 } as const;
 
 function matchesConcept(name: string, target: string) {
-  return name.trim().toLowerCase() === target.trim().toLowerCase() || name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(name.toLowerCase());
+  const normalize = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  const left = normalize(name);
+  const right = normalize(target);
+  if (!left || !right) return false;
+  if (left === right || left.includes(right) || right.includes(left)) return true;
+  const leftWords = new Set(left.split(" ").filter((word) => word.length > 3));
+  const shared = right.split(" ").filter((word) => word.length > 3 && leftWords.has(word));
+  return shared.length > 0;
 }
 
 export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Evaluation[] = [], report: Report): Report {
   const sourceConcepts = Array.isArray(conceptMap?.concepts) ? conceptMap.concepts : [];
-  const concepts = sourceConcepts.map((concept): ReportConcept => {
-    const relevant = evaluations.filter((evaluation) => evaluation?.target_concept && matchesConcept(concept.name, evaluation.target_concept));
+  const validEvaluations = evaluations.filter((evaluation) => evaluation && (evaluation.target_concept || Object.keys(evaluation.mastery_updates || {}).length));
+  const relevantFor = (concept: { name: string }) => validEvaluations.filter((evaluation) => {
+    if (evaluation.target_concept && matchesConcept(concept.name, evaluation.target_concept)) return true;
+    return Object.keys(evaluation.mastery_updates || {}).some((name) => matchesConcept(concept.name, name));
+  });
+  const scoreFor = (evaluation: Evaluation) => {
+    const level = String(evaluation.understanding_level || "").toLowerCase().trim() as keyof typeof levelScores;
+    const raw = levelScores[level] ?? Number(evaluation.answer_quality);
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(raw) ? raw : 0)));
+  };
+  let concepts = sourceConcepts.map((concept): ReportConcept => {
+    const relevant = relevantFor(concept);
     const latest = relevant[relevant.length - 1];
     if (!latest) return { name: concept.name, score: null, level: "Insufficient data", tested: false, evidence_quote: "", explanation: "This concept was not directly checked during the defence.", next_step: "Ask one focused question about this concept.", misconception_status: "none" };
-    const score = Math.max(0, Math.min(100, Math.round(levelScores[latest.understanding_level] ?? latest.answer_quality)));
+    const score = scoreFor(latest);
     const level = score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak";
     return { name: concept.name, score, level, tested: true, evidence_quote: latest.evidence_quote, explanation: latest.explanation, next_step: latest.detected_issue || "Try one application question in a new context.", misconception_status: latest.misconception_status };
   });
+  if (!concepts.some((concept) => concept.score !== null) && validEvaluations.length) {
+    concepts = validEvaluations.map((evaluation, index) => ({
+      name: evaluation.target_concept || Object.keys(evaluation.mastery_updates || {})[0] || `Checked concept ${index + 1}`,
+      score: scoreFor(evaluation),
+      level: scoreFor(evaluation) >= 75 ? "Strong" : scoreFor(evaluation) >= 50 ? "Partial" : "Weak",
+      tested: true,
+      evidence_quote: evaluation.evidence_quote || "",
+      explanation: evaluation.explanation || "This concept was checked during the defence.",
+      next_step: evaluation.detected_issue || "Try one application question in a new context.",
+      misconception_status: evaluation.misconception_status || "none",
+    }));
+  }
   const tested = concepts.filter((concept) => concept.score !== null);
   const importance = (name: string) => sourceConcepts.find((concept) => concept.name === name)?.importance.toLowerCase() === "high" ? 2 : 1;
   const totalWeight = tested.reduce((sum, concept) => sum + importance(concept.name), 0);
-  const overall = totalWeight ? Math.round(tested.reduce((sum, concept) => sum + (concept.score || 0) * importance(concept.name), 0) / totalWeight) : 0;
+  const overall = totalWeight
+    ? Math.round(tested.reduce((sum, concept) => sum + (concept.score || 0) * importance(concept.name), 0) / totalWeight)
+    : validEvaluations.length ? Math.round(validEvaluations.reduce((sum, evaluation) => sum + scoreFor(evaluation), 0) / validEvaluations.length) : 0;
   return { ...report, overall_mastery: overall, concepts, strong: concepts.filter((concept) => concept.level === "Strong").map((concept) => concept.name), weak: concepts.filter((concept) => concept.level === "Weak").map((concept) => concept.name), rubric_note: "Preliminary evidence from this defence. Final judgement remains with the teacher." };
 }
