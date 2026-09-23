@@ -76,7 +76,7 @@ export async function structureSubmission(subject: string, assignment: string, s
 
 export async function evaluateAnswer(input: { subject: string; assignment: string; submission: string; language?: string; conceptMap: ConceptMap; history: { question: string; answer: string }[]; latestAnswer: string; currentQuestion: string }) {
   return ask<Evaluation>([
-    { role: "system", content: `You are conducting an adaptive academic defence. Return strict JSON only with target_concept, answer_quality (0-100), understanding_level (one of not_demonstrated, partial, independent, applied), mastery_updates, evidence_quote, explanation, detected_issue, misconception_status (one of persists, corrected, needs_check, none), next_difficulty, and next_question. Write all human-readable output in ${languageName(input.language || "en")}. Use this rubric: not_demonstrated means no usable explanation, partial means some correct reasoning with a gap, independent means a correct explanation without prompting, applied means correct reasoning in a new case. evidence_quote must be an exact short substring of the latest answer, or an empty string. If the answer is strong, increase difficulty and go deeper; if weak, ask a simpler clarifying question on the same concept. If an earlier misconception is corrected, mark it corrected rather than repeating it as a current conclusion. Address the student directly and use their words.` },
+    { role: "system", content: `You are conducting an adaptive academic defence. Return strict JSON only with target_concept, answer_quality (0-100), understanding_level (one of not_demonstrated, partial, independent, applied), mastery_updates, evidence_quote, explanation, detected_issue, misconception_status (one of persists, corrected, needs_check, none), next_difficulty, and next_question. Write all human-readable output in ${languageName(input.language || "en")}. target_concept must be exactly one of the concept names from conceptMap, and mastery_updates must use those exact names. Use this rubric: not_demonstrated means no usable explanation, partial means some correct reasoning with a gap, independent means a correct explanation without prompting, applied means correct reasoning in a new case. evidence_quote must be an exact short substring of the latest answer, or an empty string. If the answer is strong, increase difficulty and go deeper; if weak, ask a simpler clarifying question on the same concept. If an earlier misconception is corrected, mark it corrected rather than repeating it as a current conclusion. Address the student directly and use their words.` },
     { role: "user", content: JSON.stringify(input) },
   ]);
 }
@@ -101,8 +101,13 @@ function matchesConcept(name: string, target: string) {
   return shared.length > 0;
 }
 
+function displayConceptName(name: string) {
+  return name.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase());
+}
+
 export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Evaluation[] = [], report: Report): Report {
-  const sourceConcepts = Array.isArray(conceptMap?.concepts) ? conceptMap.concepts : [];
+  const sourceConceptsRaw = Array.isArray(conceptMap?.concepts) ? conceptMap.concepts : [];
+  const sourceConcepts = Array.from(new Map(sourceConceptsRaw.map((concept) => [concept.name.toLowerCase().trim(), concept])).values());
   const validEvaluations = evaluations.filter((evaluation) => evaluation && (evaluation.target_concept || Object.keys(evaluation.mastery_updates || {}).length));
   const relevantFor = (concept: { name: string }) => validEvaluations.filter((evaluation) => {
     if (evaluation.target_concept && matchesConcept(concept.name, evaluation.target_concept)) return true;
@@ -116,22 +121,23 @@ export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Ev
   let concepts = sourceConcepts.map((concept): ReportConcept => {
     const relevant = relevantFor(concept);
     const latest = relevant[relevant.length - 1];
-    if (!latest) return { name: concept.name, score: null, level: "Insufficient data", tested: false, evidence_quote: "", explanation: "This concept was not directly checked during the defence.", next_step: "Ask one focused question about this concept.", misconception_status: "none" };
+    if (!latest) return { name: displayConceptName(concept.name), score: null, level: "Insufficient data", tested: false, evidence_quote: "", explanation: "This concept was not directly checked during the defence.", next_step: "Ask one focused question about this concept.", misconception_status: "none" };
     const score = scoreFor(latest);
     const level = score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak";
-    return { name: concept.name, score, level, tested: true, evidence_quote: latest.evidence_quote, explanation: latest.explanation, next_step: latest.detected_issue || "Try one application question in a new context.", misconception_status: latest.misconception_status };
+    const nextStep = latest.detected_issue && !["none", "no issue", "no issue detected"].includes(latest.detected_issue.toLowerCase().trim()) ? latest.detected_issue : "Try one application question in a new context.";
+    return { name: displayConceptName(concept.name), score, level, tested: true, evidence_quote: latest.evidence_quote, explanation: latest.explanation, next_step: nextStep, misconception_status: latest.misconception_status };
   });
   if (!concepts.some((concept) => concept.score !== null) && validEvaluations.length) {
-    concepts = validEvaluations.map((evaluation, index) => ({
-      name: evaluation.target_concept || Object.keys(evaluation.mastery_updates || {})[0] || `Checked concept ${index + 1}`,
-      score: scoreFor(evaluation),
-      level: scoreFor(evaluation) >= 75 ? "Strong" : scoreFor(evaluation) >= 50 ? "Partial" : "Weak",
-      tested: true,
-      evidence_quote: evaluation.evidence_quote || "",
-      explanation: evaluation.explanation || "This concept was checked during the defence.",
-      next_step: evaluation.detected_issue || "Try one application question in a new context.",
-      misconception_status: evaluation.misconception_status || "none",
-    }));
+    const latestByConcept = new Map<string, Evaluation>();
+    validEvaluations.forEach((evaluation, index) => {
+      const rawName = evaluation.target_concept || Object.keys(evaluation.mastery_updates || {})[0] || `Checked concept ${index + 1}`;
+      latestByConcept.set(rawName.toLowerCase().trim(), evaluation);
+    });
+    concepts = Array.from(latestByConcept.values()).map((evaluation, index) => {
+      const score = scoreFor(evaluation);
+      const nextStep = evaluation.detected_issue && !["none", "no issue", "no issue detected"].includes(evaluation.detected_issue.toLowerCase().trim()) ? evaluation.detected_issue : "Try one application question in a new context.";
+      return { name: displayConceptName(evaluation.target_concept || Object.keys(evaluation.mastery_updates || {})[0] || `Checked concept ${index + 1}`), score, level: score >= 75 ? "Strong" : score >= 50 ? "Partial" : "Weak", tested: true, evidence_quote: evaluation.evidence_quote || "", explanation: evaluation.explanation || "This concept was checked during the defence.", next_step: nextStep, misconception_status: evaluation.misconception_status || "none" };
+    });
   }
   const tested = concepts.filter((concept) => concept.score !== null);
   const importance = (name: string) => sourceConcepts.find((concept) => concept.name === name)?.importance.toLowerCase() === "high" ? 2 : 1;
