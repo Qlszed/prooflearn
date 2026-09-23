@@ -69,14 +69,14 @@ export type Report = {
 
 export async function structureSubmission(subject: string, assignment: string, submission: string, language = "en") {
   return ask<ConceptMap>([
-    { role: "system", content: `You are an assessment designer. Return strict JSON only. Given a subject, assignment prompt, and student's submitted answer, extract key concepts with importance (high, medium, low), the student's specific claims, expected reasoning, plausible misconceptions, and one opening_question. The opening question must reference a specific claim or phrase from the student's answer and use the language of the assignment. All concept names, claims, reasoning, misconceptions, and the opening question must be written in ${languageName(language)}. Use the exact keys concepts, claims, expected_reasoning, possible_misconceptions, opening_question. Never ask a generic question such as 'what is this concept?'` },
+    { role: "system", content: `You are an assessment designer. Return strict JSON only. Given a subject, assignment prompt, and student's submitted answer, extract 3 to 5 distinct key concepts with importance (high, medium, low), the student's specific claims, expected reasoning, plausible misconceptions, and one opening_question. Do not use only the umbrella topic as every concept. Concepts should be independently testable ideas needed for a correct answer. The opening question must reference a specific claim or phrase from the student's answer and use the language of the assignment. All concept names, claims, reasoning, misconceptions, and the opening question must be written in ${languageName(language)}. Use the exact keys concepts, claims, expected_reasoning, possible_misconceptions, opening_question. Never ask a generic question such as 'what is this concept?'` },
     { role: "user", content: JSON.stringify({ subject, assignment, submission }) },
   ]);
 }
 
 export async function evaluateAnswer(input: { subject: string; assignment: string; submission: string; language?: string; conceptMap: ConceptMap; history: { question: string; answer: string }[]; latestAnswer: string; currentQuestion: string }) {
   return ask<Evaluation>([
-    { role: "system", content: `You are conducting an adaptive academic defence. Return strict JSON only with target_concept, answer_quality (0-100), understanding_level (one of not_demonstrated, partial, independent, applied), mastery_updates, evidence_quote, explanation, detected_issue, misconception_status (one of persists, corrected, needs_check, none), next_difficulty, and next_question. Write all human-readable output in ${languageName(input.language || "en")}. target_concept must be exactly one of the concept names from conceptMap, and mastery_updates must use those exact names. Use this rubric: not_demonstrated means no usable explanation, partial means some correct reasoning with a gap, independent means a correct explanation without prompting, applied means correct reasoning in a new case. evidence_quote must be an exact short substring of the latest answer, or an empty string. If the answer is strong, increase difficulty and go deeper; if weak, ask a simpler clarifying question on the same concept. If an earlier misconception is corrected, mark it corrected rather than repeating it as a current conclusion. Address the student directly and use their words.` },
+    { role: "system", content: `You are conducting an adaptive academic defence. Return strict JSON only with target_concept, answer_quality (0-100), understanding_level (one of not_demonstrated, partial, independent, applied), mastery_updates, evidence_quote, explanation, detected_issue, misconception_status (one of persists, corrected, needs_check, none), next_difficulty, and next_question. Write all human-readable output in ${languageName(input.language || "en")}. target_concept must be exactly one of the concept names from conceptMap, and mastery_updates must use those exact names. Prefer a concept that has not yet been tested when the latest answer is independent or applied. Use this rubric and score anchors: not_demonstrated 0-39, partial 40-69, independent 70-89, applied 90-100. Do not give every independent answer the same score. The score should reflect completeness, precision, and transfer of reasoning. evidence_quote must be an exact short substring of the latest answer, or an empty string. If the answer is strong, increase difficulty and go deeper; if weak, ask a simpler clarifying question on the same concept. If an earlier misconception is corrected, mark it corrected rather than repeating it as a current conclusion. Address the student directly and use their words.` },
     { role: "user", content: JSON.stringify(input) },
   ]);
 }
@@ -115,6 +115,12 @@ function fallbackNextStep(language: string) {
   return "Ask the student to apply this idea to a new example.";
 }
 
+function rubricNote(language: string) {
+  if (language === "ru") return "Предварительные данные этой защиты. Итоговое решение принимает учитель.";
+  if (language === "kk") return "Бұл қорғаудың алдын ала деректері. Соңғы шешімді мұғалім қабылдайды.";
+  return "Preliminary evidence from this defence. Final judgement remains with the teacher.";
+}
+
 export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Evaluation[] = [], report: Report, language = "en"): Report {
   const sourceConceptsRaw = Array.isArray(conceptMap?.concepts) ? conceptMap.concepts : [];
   const sourceConcepts = Array.from(new Map(sourceConceptsRaw.map((concept) => [concept.name.toLowerCase().trim(), concept])).values());
@@ -125,7 +131,10 @@ export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Ev
   });
   const scoreFor = (evaluation: Evaluation) => {
     const level = String(evaluation.understanding_level || "").toLowerCase().trim() as keyof typeof levelScores;
-    const raw = levelScores[level] ?? Number(evaluation.answer_quality);
+    const ranges = { not_demonstrated: [0, 39], partial: [40, 69], independent: [70, 89], applied: [90, 100] } as const;
+    const rawQuality = Number(evaluation.answer_quality);
+    const range = ranges[level];
+    const raw = range && Number.isFinite(rawQuality) ? Math.max(range[0], Math.min(range[1], rawQuality)) : levelScores[level] ?? rawQuality;
     return Math.max(0, Math.min(100, Math.round(Number.isFinite(raw) ? raw : 0)));
   };
   let concepts = sourceConcepts.map((concept): ReportConcept => {
@@ -155,5 +164,5 @@ export function applyDeterministicScores(conceptMap: ConceptMap, evaluations: Ev
   const overall = totalWeight
     ? Math.round(tested.reduce((sum, concept) => sum + (concept.score || 0) * importance(concept.name), 0) / totalWeight)
     : validEvaluations.length ? Math.round(validEvaluations.reduce((sum, evaluation) => sum + scoreFor(evaluation), 0) / validEvaluations.length) : 0;
-  return { ...report, overall_mastery: overall, concepts, strong: concepts.filter((concept) => concept.level === "Strong").map((concept) => concept.name), weak: concepts.filter((concept) => concept.level === "Weak").map((concept) => concept.name), rubric_note: "Preliminary evidence from this defence. Final judgement remains with the teacher." };
+  return { ...report, overall_mastery: overall, concepts, strong: concepts.filter((concept) => concept.level === "Strong").map((concept) => concept.name), weak: concepts.filter((concept) => concept.level === "Weak").map((concept) => concept.name), misconception: report.misconception || (language === "ru" ? "Явного заблуждения в этой защите не обнаружено." : language === "kk" ? "Бұл қорғауда анық қате түсінік табылмады." : "No clear misconception was identified during this defence."), rubric_note: rubricNote(language) };
 }
